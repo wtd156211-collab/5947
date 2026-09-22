@@ -48,3 +48,40 @@ u1002,2026-09-22T10:01:00.000Z,2026-09-22T10:31:00.000Z,1800000,2
 - `samples/case-2.events.csv` / `samples/case-2.sessions.csv`：含 5 分钟以内的乱序（其中一条正好迟到 5 分钟）、同一毫秒的并列事件、正好 30 分钟与超过 30 分钟两种边界。
 
 期望输出是照上面规则算出来的，格式照着这两个文件来。
+
+## 仓库结构与运行方式
+
+代码只用 Python 标准库（Python 3.8+）。
+
+- `sessionize/streaming.py`：正常路径。逐行读入、按用户维护 35 分钟
+  （30 分钟会话间隔 + 5 分钟乱序上限）窗口内的暂定会话，水位线推进后
+  立即定版并按最终顺序吐出。内存只与窗口内的活跃用户数有关，与文件总行
+  数无关；已定版的会话不会留在内存里。
+- `sessionize/naive.py`：笨办法，全部读入、按 `(user_id, timestamp,
+  line_no)` 排序后再切。**仅供测试对拍**，正常路径不导入它（测试里
+  用 AST 检查保证这一点）。
+- `sessionize/timefmt.py`：固定形状 UTC 毫秒时间戳的解析与格式化。
+- `tests/test_sessionize.py`：`unittest` 测试，含两组样例逐字节校验、
+  40 个固定随机种子的流式/笨办法对拍、边界用例、30 万行放大对拍，以及
+  真实峰值内存测量（独立子进程、基线差分，行数翻 4 倍内存增量远小于
+  64 MiB）。
+
+命令行：
+
+```bash
+python -m sessionize.streaming input.events.csv out.sessions.csv
+python -m unittest discover -s tests
+```
+
+库形式：
+
+```python
+from sessionize import sessionize_lines
+with open("events.csv", "rb") as f:
+    for row in sessionize_lines(f):  # bytes，逐行产出，含表头
+        ...
+```
+
+乱序约定是正确性的前提：事件时间戳不得比已出现过的最大时间戳早超过
+5 分钟；超过这个窗口的迟到事件可能已经被定版丢弃。输入缺表头、时间戳
+非法或出现空行时会抛 `ValueError`。
